@@ -251,13 +251,13 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   check_success(cudaMalloc(&conv1_output_1,sizeof(float)*y1dim[0]*y1dim[1]*y1dim[2]*y1dim[3]));
   check_success(cudaMalloc(&conv2_input_1,sizeof(float)*x2dim[0]*x2dim[1]*x2dim[2]*x2dim[3]));
   check_success(cudaMalloc(&conv2_output_1,sizeof(float)*y2dim[0]*y2dim[1]*y2dim[2]*y2dim[3]));
-  // check_success(cudaMalloc(&W1_1,sizeof(float)*conv1dims[0]*conv1dims[1]*conv1dims[2]*conv1dims[3]));
-  // check_success(cudaMalloc(&W2_1,sizeof(float)*conv2dims[0]*conv2dims[1]*conv2dims[2]*conv2dims[3]));
   check_success(cudaMalloc(&NN_L1_input_1,sizeof(float)*NN_1_dim[0]*NN_1_dim[1]*NN_1_dim[2]*NN_1_dim[3]));    //10000 * 8 * 8 * 64
   check_success(cudaMalloc(&NN_L2_input_1,sizeof(float)*NN_2_dim[0]*NN_2_dim[1]));    //10000 * 128
-  // check_success(cudaMalloc(&NN_L1_weights_1,sizeof(float)*fc1dims[0]*fc1dims[1]));    //1024 * 128
-  // check_success(cudaMalloc(&NN_L2_weights_1,sizeof(float)*fc2dims[0]*fc2dims[1]));     //128 * 10
   check_success(cudaMalloc(&NN_output_gpu_1,sizeof(float)*argdim[0]*argdim[1]));    //10000 * 10
+
+  //allocate pinned memory on host 
+  cudaHostAlloc((void **) &x, sizeof(float)*x1dim[0]*x1dim[1]*x1dim[2]*x1dim[3], cudaHostAllocDefault);
+  cudaHostAlloc((void **) &argmax_input, sizeof(float) * xdims[0] * fc2dims[1], cudaHostAllocDefault);
 
   //won't change, different streams can share 
   check_success(cudaMemcpy(W2,conv2,sizeof(float)*conv2dims[0]*conv2dims[1]*conv2dims[2]*conv2dims[3],cudaMemcpyHostToDevice));
@@ -457,6 +457,8 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   check_success(cudaFree(NN_L2_weights));
   check_success(cudaFree(NN_output_gpu));
 
+  check_success(cudaFreeHost(x));
+  check_success(cudaFreeHost(argmax_input));
   printf("Cuda call success !!!!!!!!\n");
   const int fdims[] = {xdims[0], fc2dims[1]};
   argmax(argmax_input, fdims, out);
