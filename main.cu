@@ -19,6 +19,7 @@
 #define TILE_WIDTH 16
 #define MAX_WIDTH 1024
 #define POOL_SIZE 2
+#define StreamNum 2
 
 static int FLAGS_batch_size = 10000;
 static std::string FLAGS_testdata{};
@@ -210,6 +211,21 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
 	float *NN_output_gpu;
 	float *NN_L1_weights;
 	float *NN_L2_weights;
+
+  float *conv1_input_1;
+  float *conv1_output_1;
+  float *conv2_input_1;
+  float *conv2_output_1;
+  float *W1_1;
+  float *W2_1;
+  float *NN_L1_input_1;
+  float *NN_L2_input_1;
+  float *NN_output_gpu_1;
+  float *NN_L1_weights_1;
+  float *NN_L2_weights_1;
+
+  int SegSize = x1dim[0]*x1dim[1]*x1dim[2]*x1dim[3]  / StreamNum; 
+
 	int argdim[2]={xdims[0],fc2dims[1]};
 	float *argmax_input=zeros<float>(argdim);
   int x1dim[4]={xdims[0],xdims[1],xdims[2],xdims[3]};
@@ -230,24 +246,33 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   check_success(cudaMalloc(&NN_L2_weights,sizeof(float)*fc2dims[0]*fc2dims[1]));     //128 * 10
   check_success(cudaMalloc(&NN_output_gpu,sizeof(float)*argdim[0]*argdim[1]));    //10000 * 10
 
+  //stream 1 cudamalloc 
   check_success(cudaMalloc(&conv1_input_1,sizeof(float)*x1dim[0]*x1dim[1]*x1dim[2]*x1dim[3]));
   check_success(cudaMalloc(&conv1_output_1,sizeof(float)*y1dim[0]*y1dim[1]*y1dim[2]*y1dim[3]));
   check_success(cudaMalloc(&conv2_input_1,sizeof(float)*x2dim[0]*x2dim[1]*x2dim[2]*x2dim[3]));
   check_success(cudaMalloc(&conv2_output_1,sizeof(float)*y2dim[0]*y2dim[1]*y2dim[2]*y2dim[3]));
-  check_success(cudaMalloc(&W1_1,sizeof(float)*conv1dims[0]*conv1dims[1]*conv1dims[2]*conv1dims[3]));
-  check_success(cudaMalloc(&W2_1,sizeof(float)*conv2dims[0]*conv2dims[1]*conv2dims[2]*conv2dims[3]));
+  // check_success(cudaMalloc(&W1_1,sizeof(float)*conv1dims[0]*conv1dims[1]*conv1dims[2]*conv1dims[3]));
+  // check_success(cudaMalloc(&W2_1,sizeof(float)*conv2dims[0]*conv2dims[1]*conv2dims[2]*conv2dims[3]));
   check_success(cudaMalloc(&NN_L1_input_1,sizeof(float)*NN_1_dim[0]*NN_1_dim[1]*NN_1_dim[2]*NN_1_dim[3]));    //10000 * 8 * 8 * 64
   check_success(cudaMalloc(&NN_L2_input_1,sizeof(float)*NN_2_dim[0]*NN_2_dim[1]));    //10000 * 128
-  check_success(cudaMalloc(&NN_L1_weights_1,sizeof(float)*fc1dims[0]*fc1dims[1]));    //1024 * 128
-  check_success(cudaMalloc(&NN_L2_weights_1,sizeof(float)*fc2dims[0]*fc2dims[1]));     //128 * 10
+  // check_success(cudaMalloc(&NN_L1_weights_1,sizeof(float)*fc1dims[0]*fc1dims[1]));    //1024 * 128
+  // check_success(cudaMalloc(&NN_L2_weights_1,sizeof(float)*fc2dims[0]*fc2dims[1]));     //128 * 10
   check_success(cudaMalloc(&NN_output_gpu_1,sizeof(float)*argdim[0]*argdim[1]));    //10000 * 10
 
-  check_success(cudaMemcpy(conv1_input,x,sizeof(float)*x1dim[0]*x1dim[1]*x1dim[2]*x1dim[3],cudaMemcpyHostToDevice));
+  //won't change, different streams can share 
   check_success(cudaMemcpy(W2,conv2,sizeof(float)*conv2dims[0]*conv2dims[1]*conv2dims[2]*conv2dims[3],cudaMemcpyHostToDevice));
-	check_success(cudaMemcpy(W1,conv1,sizeof(float)*conv1dims[0]*conv1dims[1]*conv1dims[2]*conv1dims[3],cudaMemcpyHostToDevice));
-	check_success(cudaMemcpy(NN_L1_weights,fc1,sizeof(float)*fc1dims[0]*fc1dims[1],cudaMemcpyHostToDevice));
-	check_success(cudaMemcpy(NN_L2_weights,fc2,sizeof(float)*fc2dims[0]*fc2dims[1],cudaMemcpyHostToDevice));
+  check_success(cudaMemcpy(W1,conv1,sizeof(float)*conv1dims[0]*conv1dims[1]*conv1dims[2]*conv1dims[3],cudaMemcpyHostToDevice));
+  check_success(cudaMemcpy(NN_L1_weights,fc1,sizeof(float)*fc1dims[0]*fc1dims[1] ,cudaMemcpyHostToDevice));
+  check_success(cudaMemcpy(NN_L2_weights,fc2,sizeof(float)*fc2dims[0]*fc2dims[1] ,cudaMemcpyHostToDevice));
 
+
+
+//cudamemcpyAync for these streams 
+  check_success(cudaMemcpyAsync(conv1_input,x,sizeof(float)*x1dim[0]*x1dim[1]*x1dim[2]*x1dim[3] / StreamNum,cudaMemcpyHostToDevice, stream0));
+  check_success(cudaMemcpyAsync(conv1_input_1,x + SegSize * sizeof(float),sizeof(float)*x1dim[0]*x1dim[1]*x1dim[2]*x1dim[3] / StreamNum,cudaMemcpyHostToDevice, stream1));
+
+
+//first stream0 
 	printf("Init success!\n");
 	const auto tic = now();
   int W_grid = y1dim[1] / TILE_WIDTH;
@@ -258,7 +283,7 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   }
   int Y = H_grid * W_grid;
   dim3 conv1_block (TILE_WIDTH, TILE_WIDTH,1);
-  dim3 conv1_grid (xdims[0],y1dim[3],Y);
+  dim3 conv1_grid ((xdims[0] - 1) / StreamNum + 1,y1dim[3],Y);
 	printf("first convolution: BlockDim: (%d,%d,%d),W_grid: %d, input_wid: %d, output wid: %d, mask_wid: %d, numInput: %d, numOutput: %d\n",
 	xdims[0],y1dim[3],Y,W_grid,x1dim[1],y1dim[1],conv1dims[0],x1dim[3],y1dim[3]);
   convLayerForwardBasicKernel<<<conv1_grid,conv1_block>>>(conv1_input,W1,conv1_output,W_grid,x1dim[1],y1dim[1],conv1dims[0],x1dim[3],y1dim[3]);
@@ -268,7 +293,7 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   int numblock=num/MAX_WIDTH;
   if (num%MAX_WIDTH)
     numblock++;
-  dim3 relu4_1_grid (numblock, 1, 1);
+  dim3 relu4_1_grid ((numblock - 1) / StreamNum + 1, 1, 1);
 
 	printf("first relu4: BlockDim: (%d,%d,%d)\n",numblock,1,1);
   gpu_relu4 <<<relu4_1_grid, relu4_1_block>>> (conv1_output,num);
@@ -281,7 +306,7 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   }
   Y = H_grid * W_grid;
   dim3 avg_pool_1_block (TILE_WIDTH, TILE_WIDTH,1);
-  dim3 avg_pool_1_grid (xdims[0], x2dim[3], Y);
+  dim3 avg_pool_1_grid ((xdims[0] - 1) / StreamNum + 1, x2dim[3], Y);
 
 	printf("first averagePool: BlockDim: (%d,%d,%d)\n",xdims[0],x2dim[3],Y);
   averagePool<<<avg_pool_1_grid,avg_pool_1_block>>>(conv1_output,conv2_input,W_grid,y1dim[1],x2dim[1],y1dim[3]);
@@ -294,7 +319,7 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   }
   Y = H_grid * W_grid;
   dim3 conv2_block (TILE_WIDTH, TILE_WIDTH,1);
-  dim3 conv2_grid (xdims[0], y2dim[3], Y);
+  dim3 conv2_grid ((xdims[0] - 1) / StreamNum + 1, y2dim[3], Y);
 
 	printf("second convolution: BlockDim: (%d,%d,%d)\n",xdims[0],y2dim[3],Y);
   convLayerForwardBasicKernel<<<conv2_grid,conv2_block>>>(conv2_input,W2,conv2_output,W_grid,x2dim[1],y2dim[1],conv2dims[0],x2dim[3],y2dim[3]);
@@ -304,7 +329,7 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   numblock=num/MAX_WIDTH;
   if (num%MAX_WIDTH)
     numblock++;
-  dim3 relu4_2_grid(numblock, 1, 1);
+  dim3 relu4_2_grid((numblock - 1) / StreamNum + 1, 1, 1);
 
 	printf("second relu4: BlockDim: (%d,%d,%d)\n",numblock,1,1);
   gpu_relu4 <<<relu4_2_grid, relu4_2_block>>> (conv2_output,num);
@@ -317,20 +342,102 @@ void forward_operation_gpu(float *x, float *conv1, float *conv2, float *fc1,
   }
   Y = H_grid * W_grid;
   dim3 avg_pool_2_block (TILE_WIDTH, TILE_WIDTH,1);
-  dim3 avg_pool_2_grid (xdims[0], NN_1_dim[3], Y);
+  dim3 avg_pool_2_grid ((xdims[0] - 1) / StreamNum + 1, NN_1_dim[3], Y);
 
 	printf("second averagePool: BlockDim: (%d,%d,%d)\n",xdims[0],NN_1_dim[3],Y);
   averagePool<<<avg_pool_2_grid,avg_pool_2_block>>>(conv2_output,NN_L1_input,W_grid,y2dim[1],NN_1_dim[1],y2dim[3]);
 	dim3 fully_forward_1_grid(xdims[0],1,1);
-	dim3 fully_forward_1_block(fc1dims[0],1,1);
+	dim3 fully_forward_1_block((fc1dims[0] - 1) / StreamNum + 1,1,1);
 	printf("first fully forward: BlockDim: (%d,1,1) GridDim: (%d,1,1) output_size=%d input_size=%d\n",fc1dims[0],xdims[0],fc1dims[1],fc1dims[0]);
 	gpu_fully_forward<<<fully_forward_1_grid,fully_forward_1_block>>>(NN_L1_input,NN_L1_weights,NN_L2_input,fc1dims[1],fc1dims[0]);
 	dim3 fully_forward_2_grid(xdims[0],1,1);
-	dim3 fully_forward_2_block(fc2dims[0],1,1);
+	dim3 fully_forward_2_block((fc2dims[0] - 1) / StreamNum + 1,1,1);
 	printf("second fully forward: BlockDim: (%d,1,1) GridDim: (%d,1,1) output_size=%d input_size=%d\n",fc2dims[0],xdims[0],fc2dims[1],fc2dims[0]);
 	gpu_fully_forward<<<fully_forward_2_grid,fully_forward_2_block>>>(NN_L2_input,NN_L2_weights,NN_output_gpu,fc2dims[1],fc2dims[0]);
 	printf("copy dimension: %d*%d\n",xdims[0],fc2dims[1]);
-  check_success(cudaMemcpy(argmax_input,NN_output_gpu,sizeof(float)*xdims[0]*fc2dims[1],cudaMemcpyDeviceToHost));
+
+
+
+  //stream 1
+  const auto tic = now();
+  int W_grid = y1dim[1] / TILE_WIDTH;
+  int H_grid = y1dim[2] / TILE_WIDTH;
+  if (y1dim[1]%TILE_WIDTH){
+    W_grid++;
+    H_grid++;
+  }
+  int Y = H_grid * W_grid;
+  dim3 conv1_block (TILE_WIDTH, TILE_WIDTH,1);
+  dim3 conv1_grid (xdims[0] / StreamNum,y1dim[3],Y);
+
+  convLayerForwardBasicKernel<<<conv1_grid,conv1_block>>>(conv1_input_1,W1,conv1_output_1,W_grid,x1dim[1],y1dim[1],conv1dims[0],x1dim[3],y1dim[3]);
+  // relu layer
+  dim3 relu4_1_block (MAX_WIDTH, 1,1);
+  int num=y1dim[0]*y1dim[1]*y1dim[2]*y1dim[3];
+  int numblock=num/MAX_WIDTH;
+  if (num%MAX_WIDTH)
+    numblock++;
+  dim3 relu4_1_grid ((numblock - 1) / StreamNum + 1, 1, 1);
+
+
+  gpu_relu4 <<<relu4_1_grid, relu4_1_block>>> (conv1_output_1,num);
+  // average pool
+  W_grid = x2dim[1] / TILE_WIDTH;
+  H_grid = x2dim[2] / TILE_WIDTH;
+  if (y1dim[1]%TILE_WIDTH){
+    W_grid++;
+    H_grid++;
+  }
+  Y = H_grid * W_grid;
+  dim3 avg_pool_1_block (TILE_WIDTH, TILE_WIDTH,1);
+  dim3 avg_pool_1_grid ((xdims[0] - 1) / StreamNum + 1 , x2dim[3], Y);
+
+
+  averagePool<<<avg_pool_1_grid,avg_pool_1_block>>>(conv1_output_1,conv2_input_1,W_grid,y1dim[1],x2dim[1],y1dim[3]);
+  // second conv
+  W_grid = y2dim[1] / TILE_WIDTH;
+  H_grid = y2dim[2] / TILE_WIDTH;
+  if (y2dim[1]%TILE_WIDTH){
+    W_grid++;
+    H_grid++;
+  }
+  Y = H_grid * W_grid;
+  dim3 conv2_block (TILE_WIDTH, TILE_WIDTH,1);
+  dim3 conv2_grid ((xdims[0] - 1) / StreamNum + 1, y2dim[3], Y);
+
+
+  convLayerForwardBasicKernel<<<conv2_grid,conv2_block>>>(conv2_input_1,W2,conv2_output_1,W_grid,x2dim[1],y2dim[1],conv2dims[0],x2dim[3],y2dim[3]);
+  // relu
+  dim3 relu4_2_block(MAX_WIDTH, 1,1);
+  num=y2dim[0]*y2dim[1]*y2dim[2]*y2dim[3];
+  numblock=num/MAX_WIDTH;
+  if (num%MAX_WIDTH)
+    numblock++;
+  dim3 relu4_2_grid((numblock - 1) / StreamNum + 1, 1, 1);
+
+
+  gpu_relu4 <<<relu4_2_grid, relu4_2_block>>> (conv2_output_1,num);
+  // average pooling
+  W_grid = NN_1_dim[1] / TILE_WIDTH;
+  H_grid = NN_1_dim[2] / TILE_WIDTH;
+  if (y1dim[1]%TILE_WIDTH){
+    W_grid++;
+    H_grid++;
+  }
+  Y = H_grid * W_grid;
+  dim3 avg_pool_2_block (TILE_WIDTH, TILE_WIDTH,1);
+  dim3 avg_pool_2_grid ((xdims[0] - 1) / StreamNum + 1, NN_1_dim[3], Y);
+
+
+  averagePool<<<avg_pool_2_grid,avg_pool_2_block>>>(conv2_output_1,NN_L1_input_1,W_grid,y2dim[1],NN_1_dim[1],y2dim[3]);
+  dim3 fully_forward_1_grid(xdims[0],1,1);
+  dim3 fully_forward_1_block((fc1dims[0] - 1) / StreamNum + 1,1,1);
+  gpu_fully_forward<<<fully_forward_1_grid,fully_forward_1_block>>>(NN_L1_input_1,NN_L1_weights,NN_L2_input_1,fc1dims[1],fc1dims[0]);
+  dim3 fully_forward_2_grid(xdims[0],1,1);
+  dim3 fully_forward_2_block((fc2dims[0] - 1) / StreamNum + 1,1,1);
+  gpu_fully_forward<<<fully_forward_2_grid,fully_forward_2_block>>>(NN_L2_input_1,NN_L2_weights,NN_output_gpu_1,fc2dims[1],fc2dims[0]);
+  check_success(cudaMemcpy(argmax_input,NN_output_gpu,sizeof(float)*xdims[0]*fc2dims[1] / StreamNum,cudaMemcpyDeviceToHost));
+  check_success(cudaMemcpy(argmax_input + sizeof(float)*xdims[0]*fc2dims[1] / StreamNum,NN_output_gpu_1,sizeof(float)*xdims[0]*fc2dims[1],cudaMemcpyDeviceToHost));
 	printf("cuda call finished.\n");
 	cudaDeviceSynchronize();
   // float *probe=(float*)malloc(sizeof(float)*y1dim[0]*y1dim[1]*y1dim[2]*y1dim[3]);
