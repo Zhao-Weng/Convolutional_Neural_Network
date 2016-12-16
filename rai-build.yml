@@ -1,0 +1,19 @@
+rai:
+  version: 0.1
+resources:
+  gpus: 1
+commands:
+  build:
+    - echo "Building project"
+    - cmake -DCONFIG_USE_HUNTER=OFF /src
+    - make
+    - ./ece408 /src/data/testfull.hdf5 /src/data/model.hdf5 10000
+    - which nvprof
+    #- nvprof -o profile.nvprof -- ./ece408 /src/data/test2.hdf5 /src/data/model.hdf5 2
+    - nvprof --version
+    - >-
+      nvprof --cpu-profiling on --export-profile timeline.nvprof --
+      ./ece408 /src/data/test100.hdf5 /src/data/model.hdf5 100
+    - >-
+      nvprof --cpu-profiling on --export-profile analysis.nvprof --analysis-metrics --
+      ./ece408 /src/data/test100.hdf5 /src/data/model.hdf5 100
